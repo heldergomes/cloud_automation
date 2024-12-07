@@ -1,0 +1,104 @@
+---
+- name: Configuração do servidor postgres
+  hosts: all
+  become: yes
+  tasks:
+    - name: Atualizar cache de pacotes
+      apt:
+        update_cache: yes
+
+    - name: Atualizar pacotes instalados
+      apt:
+        upgrade: dist
+
+    - name: Instalar pacotes para criação do banco postgres
+      apt:
+        name: 
+          - acl
+          - python3
+          - python3-pip
+          - postgresql
+          - postgresql-client
+          - postgresql-contrib
+        state: present
+
+    - name: Instalar psycopg2 via pip
+      pip:
+        name: psycopg2-binary
+        state: present
+        executable: pip3
+
+    - name: Certificar-se de que o serviço PostgreSQL está ativo
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Criar usuário postgres
+      become_user: postgres
+      postgresql_user:
+        name: "tomato-user"
+        password: "tomato-pass"
+
+    - name: Criar banco de dados
+      become_user: postgres
+      postgresql_db:
+        name: "tomatodb"
+
+    - name: Configurar privilégio ao usuário no banco
+      become_user: postgres
+      postgresql_privs:
+        db: "tomatodb"
+        role: "tomato-user"
+        objs: ALL_IN_SCHEMA
+        privs: SELECT,INSERT,UPDATE,DELETE
+    
+    - name: Criar diretório de montagem
+      file:
+        path: "/mnt/postgres"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Formatar o dispositivo com ext4
+      filesystem:
+        fstype: ext4
+        dev: /dev/vdb
+
+    - name: Montar o dispositivo no diretório
+      mount:
+        path: "/mnt/postgres"
+        src: /dev/vdb
+        fstype: ext4
+        opts: defaults
+        state: mounted
+    
+    - name: Sincronizar diretório PostgreSQL
+      shell: rsync -av /var/lib/postgresql /mnt/postgres
+    
+    - name: Alterar data_directory no postgresql.conf
+      lineinfile:
+        path: /etc/postgresql/12/main/postgresql.conf
+        regexp: '^#?data_directory\s*='
+        line: "data_directory = '/mnt/postgres/postgresql/12/main'"
+        state: present
+    
+    - name: Alterar listen_addresses no postgresql.conf
+      lineinfile:
+        path: /etc/postgresql/12/main/postgresql.conf
+        regexp: '^#?listen_addresses\s*='
+        line: "listen_addresses = '*'"
+        state: present
+
+    - name: Adicionar host no pg_hba.conf
+      lineinfile:
+        path: /etc/postgresql/12/main/pg_hba.conf
+        line: "host    all     all     0.0.0.0/0    md5"
+        state: present
+        create: yes
+    
+    - name: Reiniciar o postgres
+      service:
+        name: postgresql
+        state: restarted
